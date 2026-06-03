@@ -1,8 +1,8 @@
 import argparse
 import sys
-import anthropic
+from groq import Groq                                    # ← changed
 
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import GROQ_API_KEY, GROQ_MODEL              # ← changed
 from fetcher import fetch_nvd, check_cisa_kev, extract_summary
 from prompt_builder import build_system_prompt, build_user_prompt
 from report import print_header, print_report, print_error
@@ -32,7 +32,7 @@ def main():
         "deep": args.deep,
     }
 
-    # 1. Fetch data
+    # 1. Fetch CVE data from NVD
     try:
         print(f"\n🔍 Fetching data for {cve_id}...")
         raw = fetch_nvd(cve_id)
@@ -45,28 +45,34 @@ def main():
     print("🛡  Checking CISA KEV catalog...")
     exploited = check_cisa_kev(cve_id)
 
-    # 3. Print header
+    # 3. Print report header
     print_header(cve_id, summary["cvss_score"], summary["cvss_severity"] or "UNKNOWN", exploited)
 
-    # 4. Build prompt + call Claude (streaming)
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    # 4. Build prompt
     system = build_system_prompt()
     user_prompt = build_user_prompt(summary, flags, exploited)
 
+    # 5. Call Groq with streaming
     print("⚙  Generating intelligence report...\n")
 
-    full_response = ""
-    with client.messages.stream(
-        model=CLAUDE_MODEL,
-        max_tokens=2048,
-        system=system,
-        messages=[{"role": "user", "content": user_prompt}]
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            full_response += text
+    client = Groq(api_key=GROQ_API_KEY)                  # ← changed
 
-    print("\n")  # spacing after streamed output
+    stream = client.chat.completions.create(             # ← changed: OpenAI-compatible format
+        model=GROQ_MODEL,
+        max_tokens=2048,
+        messages=[
+            {"role": "system", "content": system},       # ← system is now a message, not a param
+            {"role": "user", "content": user_prompt}
+        ],
+        stream=True
+    )
+
+    for chunk in stream:                                 # ← changed: different streaming iteration
+        delta = chunk.choices[0].delta.content
+        if delta:
+            print(delta, end="", flush=True)
+
+    print("\n")
 
 
 if __name__ == "__main__":
